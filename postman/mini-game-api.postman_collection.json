@@ -48,6 +48,32 @@
       ]
     },
     {
+      "name": "Web UI",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": []
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"serves HTML\", () => pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/html\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "Players",
       "item": [
         {
@@ -605,6 +631,7 @@
                   "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
                   "const board = pm.response.json().leaderboard;",
                   "pm.test(\"is an array of at most 10\", () => pm.expect(board).to.be.an(\"array\").with.length.at.most(10));",
+                  "pm.test(\"total counts ranked players\", () => pm.expect(pm.response.json().total).to.be.a(\"number\").and.at.least(board.length));",
                   "pm.test(\"sorted by score, highest first\", () => {",
                   "  for (let i = 1; i < board.length; i++) pm.expect(board[i - 1].score).to.be.at.least(board[i].score);",
                   "});"
@@ -681,6 +708,159 @@
                 "exec": [
                   "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
                   "pm.test(\"one entry\", () => pm.expect(pm.response.json().leaderboard).to.have.length(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Second page (offset)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/leaderboard?limit=1&offset=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "1"
+                },
+                {
+                  "key": "offset",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Page 2 at one entry per page. Compares against the top 2 to check that offset skips exactly one row."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json();",
+                  "pm.sendRequest(pm.collectionVariables.get(\"baseUrl\") + \"/leaderboard?limit=2\", (err, res) => {",
+                  "  const top2 = res.json().leaderboard;",
+                  "  pm.test(\"matches rank 2 of the full board\", () => {",
+                  "    if (top2.length < 2) return pm.expect(page.leaderboard).to.have.length(0);",
+                  "    pm.expect(page.leaderboard).to.eql([top2[1]]);",
+                  "  });",
+                  "  pm.test(\"total is the same on every page\", () => pm.expect(page.total).to.eql(res.json().total));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Offset past the end → empty page",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/leaderboard?offset=1000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "offset",
+                  "value": "1000000"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"empty list, total still set\", () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.leaderboard).to.eql([]);",
+                  "  pm.expect(body.total).to.be.a(\"number\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Negative offset → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/leaderboard?offset=-1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "offset",
+                  "value": "-1"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"returns an error message\", () => pm.expect(pm.response.json().error).to.be.a(\"string\").and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Non-numeric offset → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/leaderboard?offset=abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "offset",
+                  "value": "abc"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"returns an error message\", () => pm.expect(pm.response.json().error).to.be.a(\"string\").and.not.empty);"
                 ]
               }
             }

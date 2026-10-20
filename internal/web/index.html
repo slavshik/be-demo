@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini Game Leaderboard</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --text: #1b1f24;
+    --muted: #5f6b7a;
+    --border: #dde1e6;
+    --accent: #3b5bdb;
+    --accent-text: #ffffff;
+    --row-hover: #f1f3f6;
+    --highlight: #edf2ff;
+    --ok: #2b8a3e;
+    --err: #c92a2a;
+    --gold: #e8a400;
+    --silver: #8a96a3;
+    --bronze: #b5651d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418;
+      --surface: #1a1e24;
+      --text: #e6e9ed;
+      --muted: #96a0ad;
+      --border: #2c323a;
+      --accent: #748ffc;
+      --accent-text: #0b0d10;
+      --row-hover: #22272e;
+      --highlight: #232a45;
+      --ok: #69db7c;
+      --err: #ff8787;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  h2 { margin: 0 0 12px; font-size: 16px; }
+  .subtitle { margin: 0 0 24px; color: var(--muted); }
+
+  /* minmax(0, …) lets columns shrink below their content's natural width. */
+  .forms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 600px) { .forms { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  form { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; gap: 8px; }
+  .row > input { flex: 1; min-width: 0; }
+  .row > input.score { flex: 0 0 96px; }
+
+  input, select, button { font: inherit; color: inherit; }
+  input, select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+  }
+  input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  button {
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 7px 14px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text);
+    font-weight: 500;
+  }
+  button:disabled { opacity: 0.45; cursor: default; }
+
+  .status { min-height: 1.5em; margin: 0; font-size: 13px; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+
+  .board-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .board-head label { color: var(--muted); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.rank { width: 64px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  tbody tr:hover { background: var(--row-hover); }
+  tbody tr.highlight { background: var(--highlight); }
+  td.player { overflow-wrap: anywhere; }
+  .medal { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .medal-1 { background: var(--gold); }
+  .medal-2 { background: var(--silver); }
+  .medal-3 { background: var(--bronze); }
+  .empty { padding: 28px 10px; text-align: center; color: var(--muted); }
+
+  .pager { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; }
+  .pager span { color: var(--muted); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Leaderboard</h1>
+  <p class="subtitle">Register players, submit scores, and see who's on top.</p>
+
+  <div class="forms">
+    <section class="card">
+      <h2>Add player</h2>
+      <form id="player-form">
+        <div class="row">
+          <input id="player-name" name="username" placeholder="Username" maxlength="32"
+                 autocomplete="off" required aria-label="Username">
+          <button type="submit">Add</button>
+        </div>
+        <p id="player-status" class="status" role="status"></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Submit score</h2>
+      <form id="score-form">
+        <div class="row">
+          <input id="score-name" name="username" placeholder="Username" maxlength="32"
+                 autocomplete="off" required aria-label="Username">
+          <input id="score-value" name="score" type="number" min="0" step="1" placeholder="Score"
+                 required aria-label="Score" class="score">
+          <button type="submit">Submit</button>
+        </div>
+        <p id="score-status" class="status" role="status"></p>
+      </form>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="board-head">
+      <h2>Top players</h2>
+      <label>Per page
+        <select id="page-size">
+          <option>10</option>
+          <option>25</option>
+          <option>50</option>
+        </select>
+      </label>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Rank</th><th>Player</th><th class="num">Best score</th></tr>
+      </thead>
+      <tbody id="board"></tbody>
+    </table>
+    <div class="pager">
+      <button id="prev" class="secondary" type="button">‹ Prev</button>
+      <span id="page-info" aria-live="polite"></span>
+      <button id="next" class="secondary" type="button">Next ›</button>
+    </div>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const state = { page: 0, size: 10, total: 0, highlight: null };
+
+  // api calls the backend and throws its error message on a non-2xx status.
+  async function api(method, path, body) {
+    const res = await fetch(path, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+    return data;
+  }
+
+  function setStatus(el, text, ok) {
+    el.textContent = text;
+    el.className = "status " + (ok ? "ok" : "err");
+  }
+
+  function cell(text, className) {
+    const td = document.createElement("td");
+    td.textContent = text; // textContent, never innerHTML: usernames are user input
+    if (className) td.className = className;
+    return td;
+  }
+
+  async function loadBoard() {
+    const offset = state.page * state.size;
+    let data;
+    try {
+      data = await api("GET", `/leaderboard?limit=${state.size}&offset=${offset}`);
+    } catch (err) {
+      $("board").replaceChildren(emptyRow("Couldn't load the leaderboard: " + err.message));
+      return;
+    }
+
+    state.total = data.total;
+    const pages = Math.max(1, Math.ceil(state.total / state.size));
+    // The board can shrink under us (e.g. after a page-size change); go to the last page.
+    if (state.page >= pages) {
+      state.page = pages - 1;
+      return loadBoard();
+    }
+
+    const rows = data.leaderboard.map((entry, i) => {
+      const rank = offset + i + 1;
+      const tr = document.createElement("tr");
+      if (entry.username.toLowerCase() === state.highlight) tr.className = "highlight";
+
+      const rankCell = cell("", "rank");
+      if (rank <= 3) {
+        const medal = document.createElement("span");
+        medal.className = `medal medal-${rank}`;
+        rankCell.append(medal);
+      }
+      rankCell.append(String(rank));
+
+      tr.append(rankCell, cell(entry.username, "player"), cell(entry.score.toLocaleString(), "num"));
+      return tr;
+    });
+    $("board").replaceChildren(...(rows.length ? rows : [emptyRow("No scores yet. Add a player and submit a score.")]));
+
+    $("page-info").textContent = `Page ${state.page + 1} of ${pages} · ${state.total} players`;
+    $("prev").disabled = state.page === 0;
+    $("next").disabled = state.page >= pages - 1;
+  }
+
+  function emptyRow(text) {
+    const tr = document.createElement("tr");
+    const td = cell(text, "empty");
+    td.colSpan = 3;
+    tr.append(td);
+    return tr;
+  }
+
+  $("player-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = $("player-name").value.trim();
+    try {
+      const player = await api("POST", "/players", { username });
+      setStatus($("player-status"), `Added ${player.username}. Submit a score to rank them.`, true);
+      $("player-name").value = "";
+      $("score-name").value = player.username;
+      $("score-value").focus();
+    } catch (err) {
+      setStatus($("player-status"), err.message, false);
+    }
+  });
+
+  $("score-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = $("score-name").value.trim();
+    try {
+      const sc = await api("POST", "/scores", { username, score: Number($("score-value").value) });
+      setStatus($("score-status"), `Saved ${sc.score.toLocaleString()} for ${sc.username}.`, true);
+      $("score-value").value = "";
+      state.highlight = sc.username.toLowerCase();
+      await loadBoard();
+    } catch (err) {
+      setStatus($("score-status"), err.message, false);
+    }
+  });
+
+  $("prev").addEventListener("click", () => { state.page--; loadBoard(); });
+  $("next").addEventListener("click", () => { state.page++; loadBoard(); });
+  $("page-size").addEventListener("change", (e) => {
+    state.size = Number(e.target.value);
+    state.page = 0;
+    loadBoard();
+  });
+
+  loadBoard();
+</script>
+</body>
+</html>

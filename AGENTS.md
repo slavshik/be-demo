@@ -6,12 +6,13 @@ Prioritize **correctness > simplicity > readability**; keep Go idiomatic and min
 ## Stack & Layout
 
 Go 1.22+, standard `net/http`, `database/sql`, and `modernc.org/sqlite` (only external dependency).
-No auth, frameworks, ORMs, Redis, queues, WebSockets, repository interfaces, or extra packages.
+No auth, frameworks, ORMs, Redis, queues, WebSockets, repository interfaces, or packages beyond those listed below.
 
 - `cmd/server/main.go`: configuration, server, graceful shutdown.
 - `internal/store/store.go`: schema, queries, pragmas, sentinel errors.
 - `internal/api/handlers.go`: method-based ServeMux routes, validation, JSON helpers.
 - `internal/api/api_test.go`: HTTP tests using `testing`, `httptest`, and SQLite files in `t.TempDir()`.
+- `internal/web/`: `index.html` (inline CSS and plain JS, no build step or npm) embedded with `embed` and served at `GET /{$}` (ADR 7). It uses only the public JSON API; render user data with `textContent`, never `innerHTML`.
 
 ## API
 
@@ -23,8 +24,9 @@ Use `writeJSON`/`writeError` with `Content-Type: application/json`.
 |---|---|---|
 | `POST /players` | 201: `{username, created_at}` | Username must match `[A-Za-z0-9_-]{1,32}` (400); case-insensitive duplicate (409). |
 | `POST /scores` | 201: `{username, score, created_at}` | Require nonempty username and nonnegative integer score (400); unknown player (404). Use `Score *int64` to reject missing/null while allowing zero. |
-| `GET /leaderboard?limit=10` | 200: `{"leaderboard":[{"username":"player123","score":1500}]}` | Default limit 10; integer 1–100, otherwise 400. Return each player's maximum score, ordered score DESC then username ASC; exclude unscored players; empty list is `[]`. |
+| `GET /leaderboard?limit=10&offset=0` | 200: `{"leaderboard":[{"username":"player123","score":1500}],"total":1}` | Default limit 10; integer 1–100, otherwise 400. Offset default 0; non-negative integer, otherwise 400. Return each player's maximum score, ordered score DESC then username ASC; exclude unscored players; empty list is `[]`. `total` counts ranked players, read in the same transaction as the page. |
 | `GET /health` | 200: `{"status":"ok"}` | |
+| `GET /` | 200: web UI (HTML) | Exact path only; other unknown paths stay 404. |
 
 POST bodies contain the named fields except `created_at`, which is server-generated UTC.
 
@@ -47,7 +49,7 @@ POST bodies contain the named fields except `created_at`, which is server-genera
 ## Verification & Documentation
 
 Before finishing any change, run `gofmt -l .` (no output), `go vet ./...`, and `go test -race ./...`.
-Cover validation edge cases, duplicates, unknown players, maximum-score leaderboard, invalid limits, and concurrent requests. Never use `:memory:` for tests.
+Cover validation edge cases, duplicates, unknown players, maximum-score leaderboard, invalid limits and offsets, paging, the UI route, and concurrent requests. Check UI changes by hand in a browser. Never use `:memory:` for tests.
 
 - Commits (conventional commits + gitmoji): `type(scope): <emoji> <summary>`, max 50 characters. 
 - Architecture, schema, contract, or deployment changes require a Nygard ADR in `docs/adr/`.

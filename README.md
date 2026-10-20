@@ -1,7 +1,8 @@
 # Mini Game Backend API
 
 A REST API for a multiplayer game. Players register, submit scores, and read
-a leaderboard. It's built on Go's standard library with SQLite.
+a leaderboard. It's built on Go's standard library with SQLite, and comes
+with a small web UI.
 
 ## Quick start
 
@@ -34,6 +35,19 @@ For Postman/Newman and curl commands, see [Testing](#testing).
 The schema is created on startup. Ctrl+C stops the server after in-flight
 requests finish.
 
+## Web UI
+
+Open <http://localhost:8080> once the server is running (on Render, the
+service's root URL). The page lets you:
+
+- add a player,
+- submit a score for a player (adding a player fills in their name),
+- page through the leaderboard, 10, 25 or 50 players per page.
+
+Players appear on the leaderboard only after their first score. The page is
+a single `internal/web/index.html` with plain JavaScript, compiled into the
+server binary, so there is nothing extra to build or deploy.
+
 ## API
 
 All bodies are JSON. Errors look like `{"error": "message"}`.
@@ -42,8 +56,9 @@ All bodies are JSON. Errors look like `{"error": "message"}`.
 |-----------------------------|---------|-------------------------------------------|
 | `POST /players`             | `201`   | `400` invalid username, `409` taken       |
 | `POST /scores`              | `201`   | `400` invalid input, `404` unknown player |
-| `GET /leaderboard?limit=10` | `200`   | `400` invalid limit                       |
+| `GET /leaderboard?limit=10&offset=0` | `200` | `400` invalid limit or offset |
 | `GET /health`               | `200`   |                                           |
+| `GET /`                     | `200`   | web UI (HTML)                             |
 
 - **Usernames** are trimmed, 1–32 characters from `A-Z a-z 0-9 _ -`, and
   unique regardless of case.
@@ -51,7 +66,9 @@ All bodies are JSON. Errors look like `{"error": "message"}`.
   server-side UTC timestamp.
 - **Leaderboard** shows each player's best score, highest first. Ties are
   ordered by username, and players with no scores are left out. `limit`
-  defaults to 10 and must be 1–100.
+  defaults to 10 and must be 1–100. `offset` skips that many players
+  (default 0, must be non-negative). `total` is the number of ranked players,
+  for building a pager.
 
 ```
 POST /players  {"username": "player123"}
@@ -62,7 +79,13 @@ POST /scores   {"username": "player123", "score": 1500}
 
 GET /leaderboard?limit=2
 → 200 {"leaderboard": [{"username": "player123", "score": 1500},
-                       {"username": "player456", "score": 1200}]}
+                       {"username": "player456", "score": 1200}],
+       "total": 57}
+
+GET /leaderboard?limit=2&offset=2      (page 2)
+→ 200 {"leaderboard": [{"username": "player789", "score": 1100},
+                       {"username": "player321", "score": 950}],
+       "total": 57}
 ```
 
 ## Testing
@@ -78,8 +101,9 @@ There are two layers of tests:
 ### Postman
 
 [`postman/mini-game-api.postman_collection.json`](postman/mini-game-api.postman_collection.json)
-has 19 requests in four groups (Health, Players, Scores, Leaderboard). Each
-request has tests that check its status code and response body.
+has 23 requests: Health, Web UI, and folders for Players, Scores and
+Leaderboard (including paging). Each request has tests that check its
+status code and response body.
 
 1. Start the server: `go run ./cmd/server`.
 2. In Postman, choose **Import** and select the collection file.
@@ -116,6 +140,7 @@ curl -i -X POST localhost:8080/players -d '{"username":"PLAYER123"}'           #
 curl -i -X POST localhost:8080/scores  -d '{"username":"player123","score":1500}' # 201
 curl -i -X POST localhost:8080/scores  -d '{"username":"ghost","score":10}'     # 404
 curl -i 'localhost:8080/leaderboard?limit=3'                                    # 200
+curl -i 'localhost:8080/leaderboard?limit=3&offset=3'                           # 200, page 2
 curl -i 'localhost:8080/leaderboard?limit=0'                                    # 400
 ```
 
@@ -126,6 +151,7 @@ cmd/server/main.go        config, HTTP server, graceful shutdown
 internal/store/store.go   SQLite schema and queries
 internal/api/handlers.go  routes, validation, JSON responses
 internal/api/api_test.go  Go tests
+internal/web/             web UI (index.html, embedded in the binary)
 postman/                  Postman collection
 docs/adr/                 architecture decision records
 ```
@@ -147,6 +173,9 @@ Each decision is recorded in [`docs/adr/`](docs/adr/README.md).
   ([ADR 5](docs/adr/0005-reject-out-of-range-limit.md)).
 - **Render as the deployment target**
   ([ADR 6](docs/adr/0006-deploy-to-render.md)).
+- **Embedded web UI and offset paging**
+  ([ADR 7](docs/adr/0007-web-ui-and-paged-leaderboard.md)). One static page
+  served by the same binary; the leaderboard gains `offset` and `total`.
 
 ## Deploy (Render)
 
@@ -190,6 +219,8 @@ pushing already triggers deployment; the manual hook is optional.
 - **The leaderboard is computed on every request.** At scale, keep a
   `best_score` column updated on insert, or use a Redis sorted set for
   O(log N) updates.
-- **No pagination** beyond `limit`, and no endpoint for a player's score
-  history.
+- **Offset paging** can skip or repeat a row if scores change between page
+  loads. Keyset pagination would fix that.
+- **No endpoint for a player's score history**, and no way to list players
+  who haven't scored yet.
 - **No OpenAPI spec.**

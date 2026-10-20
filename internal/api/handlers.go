@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"be-demo/internal/store"
+	"be-demo/internal/web"
 )
 
 const (
@@ -35,6 +37,8 @@ func New(s *store.Store) http.Handler {
 	mux.HandleFunc("POST /scores", h.submitScore)
 	mux.HandleFunc("GET /leaderboard", h.leaderboard)
 	mux.HandleFunc("GET /health", health)
+	// {$} matches "/" only, so unknown paths still get 404.
+	mux.Handle("GET /{$}", web.Handler())
 	return mux
 }
 
@@ -113,26 +117,43 @@ func (h *handler) submitScore(w http.ResponseWriter, r *http.Request) {
 
 type leaderboardResponse struct {
 	Leaderboard []store.Entry `json:"leaderboard"`
+	Total       int           `json:"total"`
 }
 
 func (h *handler) leaderboard(w http.ResponseWriter, r *http.Request) {
-	limit := defaultLimit
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > maxLimit {
-			writeError(w, http.StatusBadRequest,
-				fmt.Sprintf("limit must be an integer between 1 and %d", maxLimit))
-			return
-		}
-		limit = n
+	limit, ok := queryInt(r, "limit", defaultLimit, 1, maxLimit)
+	if !ok {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("limit must be an integer between 1 and %d", maxLimit))
+		return
+	}
+	offset, ok := queryInt(r, "offset", 0, 0, math.MaxInt)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "offset must be a non-negative integer")
+		return
 	}
 
-	entries, err := h.store.Leaderboard(r.Context(), limit)
+	entries, total, err := h.store.Leaderboard(r.Context(), limit, offset)
 	if err != nil {
 		writeInternalError(w, "leaderboard", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, leaderboardResponse{Leaderboard: entries})
+	writeJSON(w, http.StatusOK, leaderboardResponse{Leaderboard: entries, Total: total})
+}
+
+// queryInt parses the optional integer query parameter key. It returns
+// defaultValue only when the parameter is absent; a present value,
+// including an empty one, must be an integer in [minValue, maxValue].
+func queryInt(r *http.Request, key string, defaultValue, minValue, maxValue int) (int, bool) {
+	values, ok := r.URL.Query()[key]
+	if !ok {
+		return defaultValue, true
+	}
+	n, err := strconv.Atoi(values[0])
+	if err != nil || n < minValue || n > maxValue {
+		return 0, false
+	}
+	return n, true
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
@@ -151,10 +172,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	// A second Decode must hit EOF. Return its error as is, so an
+	// oversized body still reports http.MaxBytesError.
+	switch err := dec.Decode(&struct{}{}); {
+	case errors.Is(err, io.EOF):
+		return nil
+	case err != nil:
+		return err
+	default:
 		return errTrailingData
 	}
-	return nil
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {

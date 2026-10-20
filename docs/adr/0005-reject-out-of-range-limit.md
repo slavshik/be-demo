@@ -6,6 +6,8 @@ Date: 2026-10-20
 
 Accepted
 
+Amended by [7. Web UI and paged leaderboard](0007-web-ui-and-paged-leaderboard.md)
+
 ## Context
 
 `GET /leaderboard` needs a default `limit` and validation. Bad values can

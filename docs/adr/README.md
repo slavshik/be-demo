@@ -6,3 +6,4 @@
 * [4. Case-insensitive, restricted usernames](0004-case-insensitive-usernames.md)
 * [5. Reject out-of-range leaderboard limit](0005-reject-out-of-range-limit.md)
 * [6. Deploy to Render](0006-deploy-to-render.md)
+* [7. Web UI and paged leaderboard](0007-web-ui-and-paged-leaderboard.md)

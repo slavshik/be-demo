@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"modernc.org/sqlite"
@@ -61,13 +62,19 @@ type Store struct {
 
 // Open opens (or creates) the database at path and applies the schema.
 func Open(path string) (*Store, error) {
-	dsn := "file:" + path +
-		"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
-	db, err := sql.Open("sqlite", dsn)
+	// Escape the path so characters like '?', '#' and '%' stay part of the
+	// filename instead of being read as URI syntax.
+	dsn := url.URL{
+		Scheme:   "file",
+		Opaque:   (&url.URL{Path: path}).EscapedPath(),
+		RawQuery: "_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)",
+	}
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	// One connection serializes writes, so SQLite never reports SQLITE_BUSY.
+	// One connection serializes this process's queries. Another process
+	// using the same file can still hold a lock; busy_timeout covers that.
 	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(schema); err != nil {
@@ -85,10 +92,10 @@ func (s *Store) Close() error {
 // CreatePlayer registers a player. It returns ErrUsernameTaken if the
 // username exists, compared case-insensitively.
 func (s *Store) CreatePlayer(ctx context.Context, username string) (Player, error) {
-	p := Player{Username: username, CreatedAt: now()}
+	p := Player{Username: username, CreatedAt: time.Now().UTC()}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO players (username, created_at) VALUES (?, ?)`,
-		p.Username, formatTime(p.CreatedAt))
+		p.Username, p.CreatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		// Rely on the UNIQUE constraint rather than checking first,
 		// so concurrent registrations can't both succeed.
@@ -104,13 +111,13 @@ func (s *Store) CreatePlayer(ctx context.Context, username string) (Player, erro
 // AddScore stores a score for an existing player. It returns
 // ErrPlayerNotFound if no player has that username.
 func (s *Store) AddScore(ctx context.Context, username string, score int64) (Score, error) {
-	sc := Score{Username: username, Score: score, CreatedAt: now()}
+	sc := Score{Username: username, Score: score, CreatedAt: time.Now().UTC()}
 	// The player lookup and the insert are one statement, so there is no
 	// window where the player could be checked but not yet written against.
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO scores (player_id, score, created_at)
 		 SELECT id, ?, ? FROM players WHERE username = ?`,
-		sc.Score, formatTime(sc.CreatedAt), sc.Username)
+		sc.Score, sc.CreatedAt.Format(time.RFC3339Nano), sc.Username)
 	if err != nil {
 		return Score{}, fmt.Errorf("insert score: %w", err)
 	}
@@ -124,18 +131,32 @@ func (s *Store) AddScore(ctx context.Context, username string, score int64) (Sco
 	return sc, nil
 }
 
-// Leaderboard returns up to limit players ranked by their best score,
-// highest first, ties broken by username. Players without scores are
-// left out. The result is never nil.
-func (s *Store) Leaderboard(ctx context.Context, limit int) ([]Entry, error) {
-	rows, err := s.db.QueryContext(ctx,
+// Leaderboard returns one page of players ranked by their best score,
+// highest first, ties broken by username, skipping the first offset
+// players. It also returns the total number of ranked players. Players
+// without scores are left out. The entries are never nil.
+func (s *Store) Leaderboard(ctx context.Context, limit, offset int) ([]Entry, int, error) {
+	// One transaction, so the page and the total come from the same snapshot.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin leaderboard: %w", err)
+	}
+	defer tx.Rollback()
+
+	var total int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT player_id) FROM scores`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count leaderboard: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx,
 		`SELECT p.username, MAX(s.score) AS best
 		 FROM players p JOIN scores s ON s.player_id = p.id
 		 GROUP BY p.id
 		 ORDER BY best DESC, p.username ASC
-		 LIMIT ?`, limit)
+		 LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("query leaderboard: %w", err)
+		return nil, 0, fmt.Errorf("query leaderboard: %w", err)
 	}
 	defer rows.Close()
 
@@ -143,20 +164,12 @@ func (s *Store) Leaderboard(ctx context.Context, limit int) ([]Entry, error) {
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.Username, &e.Score); err != nil {
-			return nil, fmt.Errorf("scan leaderboard: %w", err)
+			return nil, 0, fmt.Errorf("scan leaderboard: %w", err)
 		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read leaderboard: %w", err)
+		return nil, 0, fmt.Errorf("read leaderboard: %w", err)
 	}
-	return entries, nil
-}
-
-func now() time.Time {
-	return time.Now().UTC()
-}
-
-func formatTime(t time.Time) string {
-	return t.Format(time.RFC3339Nano)
+	return entries, total, nil
 }

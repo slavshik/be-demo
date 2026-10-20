@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -111,6 +112,25 @@ func TestCreatePlayerDuplicate(t *testing.T) {
 	}
 }
 
+func TestOversizedBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"oversized string", `{"username":"` + strings.Repeat("a", maxBodyBytes) + `"}`},
+		// Valid JSON, then the limit is hit while checking for trailing data.
+		{"oversized trailing whitespace", `{"username":"player123"}` + strings.Repeat(" ", maxBodyBytes)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, newHandler(t), http.MethodPost, "/players", tt.body)
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status %d, want 413; body %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
 func TestSubmitScore(t *testing.T) {
 	tests := []struct {
 		name string
@@ -163,7 +183,7 @@ func leaderboard(t *testing.T, h http.Handler, query string) []store.Entry {
 
 func TestLeaderboardEmpty(t *testing.T) {
 	rec := do(t, newHandler(t), http.MethodGet, "/leaderboard", "")
-	if got, want := strings.TrimSpace(rec.Body.String()), `{"leaderboard":[]}`; got != want {
+	if got, want := strings.TrimSpace(rec.Body.String()), `{"leaderboard":[],"total":0}`; got != want {
 		t.Fatalf("body = %s, want %s", got, want)
 	}
 }
@@ -195,7 +215,7 @@ func TestLeaderboardRanking(t *testing.T) {
 		{Username: "dave", Score: 1200},
 		{Username: "carol", Score: 0},
 	} // "idle" has no scores and is left out
-	if fmt.Sprint(got) != fmt.Sprint(want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("leaderboard = %v, want %v", got, want)
 	}
 
@@ -204,13 +224,20 @@ func TestLeaderboardRanking(t *testing.T) {
 	}
 }
 
-func TestLeaderboardDefaultLimit(t *testing.T) {
-	h := newHandler(t)
-	for i := range 15 {
+// seedRanked adds n players, p00 … p{n-1}, where p{i} has score i, so the
+// leaderboard ranks them in reverse: rank 1 is p{n-1}.
+func seedRanked(t *testing.T, h http.Handler, n int) {
+	t.Helper()
+	for i := range n {
 		name := fmt.Sprintf("p%02d", i)
 		mustDo(t, h, http.MethodPost, "/players", `{"username":"`+name+`"}`, http.StatusCreated)
 		mustDo(t, h, http.MethodPost, "/scores", fmt.Sprintf(`{"username":%q,"score":%d}`, name, i), http.StatusCreated)
 	}
+}
+
+func TestLeaderboardDefaultLimit(t *testing.T) {
+	h := newHandler(t)
+	seedRanked(t, h, 15)
 	if got := leaderboard(t, h, ""); len(got) != defaultLimit {
 		t.Fatalf("default: %d entries, want %d", len(got), defaultLimit)
 	}
@@ -219,13 +246,64 @@ func TestLeaderboardDefaultLimit(t *testing.T) {
 	}
 }
 
-func TestLeaderboardInvalidLimit(t *testing.T) {
+func TestLeaderboardPaging(t *testing.T) {
 	h := newHandler(t)
-	for _, q := range []string{"0", "-1", "101", "abc", "1.5", "10abc"} {
-		rec := do(t, h, http.MethodGet, "/leaderboard?limit="+q, "")
+	seedRanked(t, h, 15)
+	mustDo(t, h, http.MethodPost, "/players", `{"username":"idle"}`, http.StatusCreated) // unscored: not counted
+
+	tests := []struct {
+		query     string
+		wantCount int
+		wantFirst string
+	}{
+		{"?limit=10&offset=0", 10, "p14"},
+		{"?limit=10&offset=10", 5, "p04"},
+		{"?limit=5&offset=14", 1, "p00"},
+		{"?offset=15", 0, ""},
+		{"?offset=1000", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			rec := do(t, h, http.MethodGet, "/leaderboard"+tt.query, "")
+			got := decode[leaderboardResponse](t, rec)
+			if got.Total != 15 {
+				t.Errorf("total = %d, want 15", got.Total)
+			}
+			if len(got.Leaderboard) != tt.wantCount {
+				t.Fatalf("%d entries, want %d", len(got.Leaderboard), tt.wantCount)
+			}
+			if tt.wantCount > 0 && got.Leaderboard[0].Username != tt.wantFirst {
+				t.Errorf("first = %s, want %s", got.Leaderboard[0].Username, tt.wantFirst)
+			}
+		})
+	}
+}
+
+func TestLeaderboardInvalidParams(t *testing.T) {
+	h := newHandler(t)
+	for _, q := range []string{
+		"limit=", "limit=0", "limit=-1", "limit=101", "limit=abc", "limit=1.5", "limit=10abc",
+		"offset=", "offset=-1", "offset=abc", "offset=1.5", "offset=99999999999999999999",
+	} {
+		rec := do(t, h, http.MethodGet, "/leaderboard?"+q, "")
 		if rec.Code != http.StatusBadRequest {
-			t.Errorf("limit=%s: status %d, want 400", q, rec.Code)
+			t.Errorf("%s: status %d, want 400", q, rec.Code)
 		}
+	}
+}
+
+func TestUI(t *testing.T) {
+	h := newHandler(t)
+	rec := do(t, h, http.MethodGet, "/", "")
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("GET /: status %d, Content-Type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Body.String(), "<title>Mini Game Leaderboard</title>") {
+		t.Fatal("GET /: page title missing")
+	}
+	// Only "/" serves the UI; other paths are not swallowed by it.
+	if rec := do(t, h, http.MethodGet, "/nope", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /nope: status %d, want 404", rec.Code)
 	}
 }
 
@@ -285,7 +363,13 @@ func TestConcurrentRequests(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			resp.Body.Close()
+			defer resp.Body.Close()
+			var body leaderboardResponse
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("leaderboard: status %d, want 200", resp.StatusCode)
+			} else if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Errorf("leaderboard: decode: %v", err)
+			}
 		})
 	}
 	wg.Wait()
