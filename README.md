@@ -8,9 +8,23 @@ a leaderboard. It's built on Go's standard library with SQLite.
 Requires Go 1.26+ (see `go.mod`). No CGO or system SQLite needed.
 
 ```sh
-go run ./cmd/server          # listens on :8080, creates ./game.db
-go test -race ./...          # automated tests
+make run                    # listens on :8080, creates ./game.db
+make test                  # formatting, vet, race tests
 ```
+
+### Command interface
+
+Requires Make. Four commands cover the workflow:
+
+| Command | Purpose |
+|---------|---------|
+| `make build` (or `make`) | Build `./server` |
+| `make run` | Run from source |
+| `make test` | Check formatting, run vet and race tests |
+| `make deploy` | Request a Render deployment (requires curl and a deploy hook) |
+
+Override runtime settings with `make run PORT=9090 DATABASE_PATH=./local.db`.
+For Postman/Newman and curl commands, see [Testing](#testing).
 
 | Env var         | Default     |
 |-----------------|-------------|
@@ -140,13 +154,30 @@ Create a Render web service from this repository:
 
 | Setting           | Value                             |
 |-------------------|-----------------------------------|
-| Build command     | `go build -o server ./cmd/server` |
+| Build command     | `make build`                     |
 | Start command     | `./server`                        |
 | Health check path | `/health`                         |
 
 Render sets `PORT`. On the free tier the disk is ephemeral, so the SQLite
 file is lost on every redeploy or restart. To keep data, mount a persistent
 disk and point `DATABASE_PATH` at it.
+
+For manual deployments, copy the service's secret
+[deploy hook URL](https://render.com/docs/deploy-hooks) from Render Settings
+into the `RENDER_DEPLOY_HOOK_URL` environment variable, then run:
+
+```sh
+make test
+git push origin main
+make deploy
+```
+
+Commit changes before pushing. `make deploy` deploys the latest commit on
+the branch configured in Render; it does not upload local files, commit,
+or push. It requests deployment and returns without waiting for completion.
+Check progress in Render, then run `curl --fail https://your-app.onrender.com/health`.
+Keep the hook URL out of source control. If Render auto-deploy is enabled,
+pushing already triggers deployment; the manual hook is optional.
 
 ## Limitations and next steps
 

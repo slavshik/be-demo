@@ -18,6 +18,12 @@ Deploy as a Render web service. The server listens on `PORT`, reads the
 SQLite file from `DATABASE_PATH`, and exposes `GET /health` for Render's
 health check.
 
+Use `make build` as the build command and `./server` as the start command.
+The Makefile provides a manual `make deploy` command using Render's deploy
+hook, supplied through the `RENDER_DEPLOY_HOOK_URL` environment variable.
+It requests deployment of the configured branch without pushing local
+changes or waiting for completion.
+
 ## Consequences
 
 On the free tier the SQLite file is lost on every redeploy or restart. That
