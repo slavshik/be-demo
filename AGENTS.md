@@ -51,4 +51,5 @@ Cover validation edge cases, duplicates, unknown players, maximum-score leaderbo
 
 - Commits (conventional commits + gitmoji): `type(scope): <emoji> <summary>`, max 50 characters. 
 - Architecture, schema, contract, or deployment changes require a Nygard ADR in `docs/adr/`.
-- README: run/test commands, copy-pasteable curl examples, ADR links, limitations, and future improvements.
+- README: run/test commands, Postman/Newman and curl instructions, ADR links, limitations, and future improvements.
+- Keep `postman/mini-game-api.postman_collection.json` in sync with the API contract: every endpoint and error case gets a request with `pm.test` checks. After an API change, run it with `npx newman run` against a live server.
