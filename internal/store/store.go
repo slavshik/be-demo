@@ -1,4 +1,4 @@
-// Package store keeps players and scores in SQLite.
+// Package store persists players and scores in SQLite.
 package store
 
 import (
@@ -13,7 +13,6 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-// Sentinel errors that handlers map to HTTP status codes.
 var (
 	ErrUsernameTaken  = errors.New("username taken")
 	ErrPlayerNotFound = errors.New("player not found")
@@ -36,34 +35,29 @@ CREATE TABLE IF NOT EXISTS scores (
 CREATE INDEX IF NOT EXISTS idx_scores_player_score ON scores(player_id, score);
 `
 
-// Player is a registered player.
 type Player struct {
 	Username  string    `json:"username"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Score is one stored score submission.
 type Score struct {
 	Username  string    `json:"username"`
 	Score     int64     `json:"score"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Entry is one leaderboard row: a player and their best score.
 type Entry struct {
 	Username string `json:"username"`
 	Score    int64  `json:"score"`
 }
 
-// Store is a SQLite-backed store for players and scores.
 type Store struct {
 	db *sql.DB
 }
 
-// Open opens (or creates) the database at path and applies the schema.
+// Open opens the database and applies the schema.
 func Open(path string) (*Store, error) {
-	// Escape the path so characters like '?', '#' and '%' stay part of the
-	// filename instead of being read as URI syntax.
+	// Escape filenames so special characters are not treated as URI syntax.
 	dsn := url.URL{
 		Scheme:   "file",
 		Opaque:   (&url.URL{Path: path}).EscapedPath(),
@@ -73,8 +67,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	// One connection serializes this process's queries. Another process
-	// using the same file can still hold a lock; busy_timeout covers that.
+	// Serialize local queries; busy_timeout handles external locks.
 	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(schema); err != nil {
@@ -84,21 +77,17 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Close closes the database.
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// CreatePlayer registers a player. It returns ErrUsernameTaken if the
-// username exists, compared case-insensitively.
+// CreatePlayer returns ErrUsernameTaken for case-insensitive duplicates.
 func (s *Store) CreatePlayer(ctx context.Context, username string) (Player, error) {
 	p := Player{Username: username, CreatedAt: time.Now().UTC()}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO players (username, created_at) VALUES (?, ?)`,
 		p.Username, p.CreatedAt.Format(time.RFC3339Nano))
 	if err != nil {
-		// Rely on the UNIQUE constraint rather than checking first,
-		// so concurrent registrations can't both succeed.
 		var se *sqlite.Error
 		if errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 			return Player{}, ErrUsernameTaken
@@ -108,12 +97,9 @@ func (s *Store) CreatePlayer(ctx context.Context, username string) (Player, erro
 	return p, nil
 }
 
-// AddScore stores a score for an existing player. It returns
-// ErrPlayerNotFound if no player has that username.
+// AddScore returns ErrPlayerNotFound for unknown players.
 func (s *Store) AddScore(ctx context.Context, username string, score int64) (Score, error) {
 	sc := Score{Username: username, Score: score, CreatedAt: time.Now().UTC()}
-	// The player lookup and the insert are one statement, so there is no
-	// window where the player could be checked but not yet written against.
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO scores (player_id, score, created_at)
 		 SELECT id, ?, ? FROM players WHERE username = ?`,
@@ -131,12 +117,9 @@ func (s *Store) AddScore(ctx context.Context, username string, score int64) (Sco
 	return sc, nil
 }
 
-// Leaderboard returns one page of players ranked by their best score,
-// highest first, ties broken by username, skipping the first offset
-// players. It also returns the total number of ranked players. Players
-// without scores are left out. The entries are never nil.
+// Leaderboard returns best scores and the ranked player count. Entries are never nil.
 func (s *Store) Leaderboard(ctx context.Context, limit, offset int) ([]Entry, int, error) {
-	// One transaction, so the page and the total come from the same snapshot.
+	// Keep the page and total in the same snapshot.
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, 0, fmt.Errorf("begin leaderboard: %w", err)

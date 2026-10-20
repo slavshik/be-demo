@@ -1,4 +1,4 @@
-// Command server runs the mini game backend API.
+// Command server runs the game API.
 package main
 
 import (

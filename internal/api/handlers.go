@@ -29,7 +29,7 @@ type handler struct {
 	store *store.Store
 }
 
-// New returns the API's routes backed by s.
+// New returns the API routes.
 func New(s *store.Store) http.Handler {
 	h := &handler{store: s}
 	mux := http.NewServeMux()
@@ -37,7 +37,6 @@ func New(s *store.Store) http.Handler {
 	mux.HandleFunc("POST /scores", h.submitScore)
 	mux.HandleFunc("GET /leaderboard", h.leaderboard)
 	mux.HandleFunc("GET /health", health)
-	// {$} matches "/" only, so unknown paths still get 404.
 	mux.Handle("GET /{$}", web.Handler())
 	return mux
 }
@@ -77,14 +76,13 @@ func (h *handler) createPlayer(w http.ResponseWriter, r *http.Request) {
 
 type submitScoreRequest struct {
 	Username string `json:"username"`
-	// A pointer tells a missing or null score apart from a real 0.
+	// Distinguish missing/null from zero.
 	Score *int64 `json:"score"`
 }
 
 func (h *handler) submitScore(w http.ResponseWriter, r *http.Request) {
 	var req submitScoreRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		// Floats, strings and int64 overflow all fail to decode into Score.
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) && typeErr.Field == "score" {
 			writeError(w, http.StatusBadRequest, "score must be a non-negative integer")
@@ -141,9 +139,6 @@ func (h *handler) leaderboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, leaderboardResponse{Leaderboard: entries, Total: total})
 }
 
-// queryInt parses the optional integer query parameter key. It returns
-// defaultValue only when the parameter is absent; a present value,
-// including an empty one, must be an integer in [minValue, maxValue].
 func queryInt(r *http.Request, key string, defaultValue, minValue, maxValue int) (int, bool) {
 	values, ok := r.URL.Query()[key]
 	if !ok {
@@ -160,11 +155,8 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// errTrailingData reports a body with more than one JSON value.
 var errTrailingData = errors.New("trailing data after JSON object")
 
-// decodeJSON decodes exactly one JSON object from the body into dst,
-// rejecting unknown fields, trailing data and bodies over maxBodyBytes.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
@@ -172,8 +164,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
-	// A second Decode must hit EOF. Return its error as is, so an
-	// oversized body still reports http.MaxBytesError.
+	// Require EOF while preserving errors such as http.MaxBytesError.
 	switch err := dec.Decode(&struct{}{}); {
 	case errors.Is(err, io.EOF):
 		return nil
@@ -194,7 +185,6 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 }
 
 func writeInternalError(w http.ResponseWriter, op string, err error) {
-	// Log the cause, but never send SQL details to the client.
 	slog.Error(op, "err", err)
 	writeError(w, http.StatusInternalServerError, "internal server error")
 }

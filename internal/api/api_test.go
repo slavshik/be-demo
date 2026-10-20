@@ -14,8 +14,7 @@ import (
 	"be-demo/internal/store"
 )
 
-// newHandler returns the API backed by a fresh SQLite file. A file, not
-// :memory:, so pragmas and the connection pool behave as in production.
+// Use a file so SQLite behaves as in production.
 func newHandler(t *testing.T) http.Handler {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -35,7 +34,6 @@ func do(t *testing.T, h http.Handler, method, path, body string) *httptest.Respo
 	return rec
 }
 
-// mustDo is do that fails the test unless the response has the wanted status.
 func mustDo(t *testing.T, h http.Handler, method, path, body string, want int) {
 	t.Helper()
 	if rec := do(t, h, method, path, body); rec.Code != want {
@@ -224,8 +222,7 @@ func TestLeaderboardRanking(t *testing.T) {
 	}
 }
 
-// seedRanked adds n players, p00 … p{n-1}, where p{i} has score i, so the
-// leaderboard ranks them in reverse: rank 1 is p{n-1}.
+// Player p{i} scores i, so ranking reverses insertion order.
 func seedRanked(t *testing.T, h http.Handler, n int) {
 	t.Helper()
 	for i := range n {
